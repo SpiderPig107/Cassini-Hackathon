@@ -163,4 +163,4 @@ if st.session_state.assessment_run:
     st.divider()
     col_dl, col_attr = st.columns([1, 1])
     col_dl.button("📥 Download PDF Assessment (AQS-2026-0001)")
-    col_attr.caption(f"Data attribution: Copernicus CLMS (2018), EGMS (20
+    col_attr.caption(f"Data attribution: Copernicus CLMS (2018), EGMS (2025), OPW CFRAM. Generated: {datetime.now().isoformat()}")
