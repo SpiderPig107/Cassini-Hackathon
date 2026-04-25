@@ -4,124 +4,163 @@ from streamlit_folium import st_folium
 from folium.plugins import Draw
 import pandas as pd
 import numpy as np
+from shapely.geometry import shape, polygon
 from datetime import datetime
 
-# 1. Page & Branding Setup
+# --- PAGE CONFIG ---
 st.set_page_config(layout="wide", page_title="AquaScan | Planning Decision Support")
 
+# Custom CSS for LPA-style Dashboard
 st.markdown("""
     <style>
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 8px; border: 1px solid #e0e0e0; }
-    .report-card { background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+    .main { background-color: #f8f9fa; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #007bff; color: white; }
+    .report-section { background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #dee2e6; margin-top: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. Sidebar: Site Registration (PRD 4.1)
+# --- SESSION STATE INITIALISATION ---
+if 'assessment_run' not in st.session_state:
+    st.session_state.assessment_run = False
+if 'site_area' not in st.session_state:
+    st.session_state.site_area = 0.0
+if 'coords' not in st.session_state:
+    st.session_state.coords = (53.3498, -6.2603)
+
+# --- SIDEBAR: SITE REGISTRATION (PRD 4.1) ---
 with st.sidebar:
     st.title("🛰️ AquaScan MVP")
-    st.subheader("Site Registration")
+    st.caption("v0.1 | Dublin Pilot")
     
-    app_ref = st.text_input("Application Reference", "AQS-2026-0001")
-    lpa = st.selectbox("Local Authority", ["Dublin City Council", "Fingal", "South Dublin", "DLR"])
-    
-    col_coords = st.columns(2)
-    lat = col_coords[0].number_input("Latitude", value=53.3498, format="%.5f")
-    lng = col_coords[1].number_input("Longitude", value=-6.2603, format="%.5f")
-    
-    site_area = st.number_input("Site Area (ha)", value=1.5)
-    units = st.number_input("Proposed Units", value=50)
-    
+    with st.expander("Administrative Details", expanded=True):
+        app_ref = st.text_input("Planning Ref", value="AQS-2026-0001")
+        lpa_choice = st.selectbox("Local Authority", ["Dublin City Council", "Fingal", "South Dublin", "DLR"])
+        unit_count = st.number_input("Proposed Units", min_value=1, value=50)
+
+    with st.expander("GNSS & Precision (Galileo/EGNOS)", expanded=True):
+        egnos_toggle = st.toggle("EGNOS Augmentation Active", value=True)
+        st.info(f"Target Accuracy: {'±0.8m' if egnos_toggle else '±3.0m'}")
+        
     st.divider()
-    egnos_status = st.toggle("EGNOS Correction Active", value=True)
-    accuracy = 0.8 if egnos_status else 3.0
-    st.caption(f"Estimated Positional Accuracy: ±{accuracy}m")
+    # Dynamic Inputs from Map
+    st.write("**Derived Site Data**")
+    lat_input = st.number_input("Latitude", value=st.session_state.coords[0], format="%.6f")
+    lng_input = st.number_input("Longitude", value=st.session_state.coords[1], format="%.6f")
+    area_input = st.number_input("Site Area (ha)", value=st.session_state.site_area, format="%.2f")
+    
+    if st.button("🚀 Run Assessment"):
+        if area_input <= 0:
+            st.error("Please draw a site boundary first.")
+        else:
+            st.session_state.assessment_run = True
 
-# 3. Main Dashboard Header
-st.title(f"Assessment: {app_ref}")
-st.write(f"**Target LPA:** {lpa} | **Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+# --- MAIN INTERFACE ---
+st.title(f"Planning Assessment Report: {app_ref}")
+st.write(f"**LPA:** {lpa_choice} | **User:** Planning Officer | **Status:** { 'Complete' if st.session_state.assessment_run else 'Pending Site Delineation' }")
 
-# 4. Interactive Map Layer (PRD 4.1)
-m = folium.Map(location=[lat, lng], zoom_start=15, tiles="CartoDB Positron")
-draw = Draw(export=False, draw_options={'polyline':False, 'circle':False, 'marker':False})
-draw.add_to(m)
+# Map Section
+col_map, col_info = st.columns([2, 1])
 
-# Placeholder for actual Copernicus Layer Overlays
-# folium.WmsTileLayer(url="COPERNICUS_WMS_URL", layers="IMPERVIOUSNESS").add_to(m)
+with col_map:
+    m = folium.Map(location=[53.3498, -6.2603], zoom_start=14, tiles="CartoDB Positron")
+    draw = Draw(
+        export=False,
+        draw_options={'polyline': False, 'rectangle': True, 'polygon': True, 'circle': False, 'marker': False},
+        edit_options={'edit': True}
+    )
+    draw.add_to(m)
+    
+    # Catching map interactions
+    map_output = st_folium(m, width="100%", height=500)
 
-map_data = st_folium(m, width=1200, height=450)
+    # Logic to update Sidebar based on Map Drawing
+    if map_output['last_active_drawing']:
+        geometry = map_output['last_active_drawing']['geometry']
+        s = shape(geometry)
+        
+        # Calculate Area (Approximate for WGS84)
+        # In production, we'd project to EPSG:2157 (ITM) for accuracy
+        area_sqm = s.area * (111000 * 111000 * np.cos(np.radians(53.3)))
+        st.session_state.site_area = round(area_sqm / 10000, 2)
+        
+        # Get Centroid Coords
+        centroid = s.centroid
+        st.session_state.coords = (centroid.y, centroid.x)
 
-# 5. Assessment Logic & Risk Calculation
-def calculate_risk():
-    # Simulated values based on PRD thresholds
-    results = {
-        "flood": {"level": "MEDIUM", "val": "Zone B", "desc": "15% of site area in fluvial flood zone."},
-        "impervious": {"level": "HIGH", "val": "65%", "desc": "Pre-dev baseline: 12%. Significant runoff delta."},
-        "soil": {"level": "LOW", "val": "42/100", "desc": "Soil Water Index suggests infiltration is likely viable."},
-        "ground": {"level": "LOW", "val": "-1.1mm/yr", "desc": "Stable vertical displacement detected via EGMS."},
-        "wfd": {"level": "HIGH", "val": "Poor", "desc": "Nearby Liffey_180 water body is failing ecological targets."}
+with col_info:
+    st.subheader("Site Overview")
+    st.markdown(f"""
+    - **Galileo Lat:** `{st.session_state.coords[0]:.6f}`
+    - **Galileo Lng:** `{st.session_state.coords[1]:.6f}`
+    - **Total Area:** `{st.session_state.site_area} ha`
+    - **EGNOS Status:** {'✅ Corrected' if egnos_toggle else '⚠️ Standard'}
+    """)
+    if st.session_state.site_area > 50:
+        st.warning("Flag: Site exceeds 50 ha. Manual review required.")
+
+# --- ASSESSMENT RESULTS (PRD 4.2 - 4.6) ---
+if st.session_state.assessment_run:
+    st.divider()
+    
+    # Simulation Logic for Modules
+    # In a real environment, these call Copernicus APIs
+    modules = {
+        "Flood Zone": {"val": "Zone B", "risk": "MEDIUM", "ref": "OPW 2009 Guidelines"},
+        "Imperviousness": {"val": "Delta +42%", "risk": "HIGH", "ref": "GDSDS 2005"},
+        "Soil Moisture": {"val": "SWI 78", "risk": "HIGH", "ref": "BRE Digest 365"},
+        "Ground Motion": {"val": "-0.5mm/yr", "risk": "LOW", "ref": "EGMS Ortho"},
+        "WFD Status": {"val": "Moderate", "risk": "MEDIUM", "ref": "SI 272/2009"}
     }
-    return results
 
-res = calculate_risk()
+    cols = st.columns(5)
+    for i, (name, data) in enumerate(modules.items()):
+        with cols[i]:
+            st.metric(name, data["val"], data["risk"], delta_color="inverse" if data["risk"] == "HIGH" else "normal")
+            st.caption(f"Ref: {data['ref']}")
 
-# 6. Module Cards (PRD 4.2 - 4.6)
-st.divider()
-cols = st.columns(5)
+    # --- SUMMARY SECTION (PRD 4.7) ---
+    st.markdown('<div class="report-section">', unsafe_allow_html=True)
+    st.subheader("Executive Summary & Determination")
+    
+    risk_col, rec_col = st.columns(2)
+    risk_col.error("OVERALL RISK: HIGH (Triggered by Soil Saturation & Runoff Delta)")
+    rec_col.warning("RECOMMENDATION: Further Information Required (FI Prescribed)")
 
-module_names = ["Flood Zone", "Imperviousness", "Soil Moisture", "Ground Motion", "WFD Status"]
-keys = ["flood", "impervious", "soil", "ground", "wfd"]
+    st.write("---")
+    st.subheader("Draft Planning Conditions")
+    
+    cond1 = st.text_area("Condition 1: Flood Risk", 
+        "The applicant shall submit a site-specific Flood Risk Assessment (Stage 3) including a Justification Test, in accordance with OPW Guidelines 2009.")
+    
+    cond2 = st.text_area("Condition 2: SuDS Attenuation", 
+        f"Attenuation storage must be provided for the {unit_count} units to limit discharge to 2 l/s/ha for the 1-in-100 year event.")
+    
+    cond3 = st.text_area("Condition 3: Soil Testing", 
+        "Due to high satellite-derived Soil Water Index (SWI 78), field infiltration testing per BRE Digest 365 is mandatory prior to commencement.")
 
-for i, col in enumerate(cols):
-    key = keys[i]
-    color = "inverse" if res[key]["level"] == "HIGH" else "normal"
-    col.metric(module_names[i], res[key]["val"], res[key]["level"], delta_color=color)
-    with col.expander("Details"):
-        st.write(res[key]["desc"])
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# 7. Hydrological Science (Rational Method)
-st.divider()
-st.subheader("Module 2: Attenuation Requirements")
+    # --- HYDROLOGICAL SCIENCE (FORMULA REQUIREMENT) ---
+    st.divider()
+    st.write("**The Attenuation Formula (Layman's Version):**")
+    st.info("Peak Flow = (Hardness of Surface) × (Rainfall Intensity) × (Size of Site)")
 
-# Scientific Notation Requirement
-st.write("**The Runoff Formula (Layman's English):**")
-st.info("Peak Water Flow = (Surface Hardness) × (Rainfall Intensity) × (Site Size)")
+    st.write("**The Scientific Notation (Rational Method):**")
+    st.latex(r"Q = C \cdot i \cdot A")
 
-st.write("**The Scientific Notation:**")
-st.latex(r"Q = C \cdot i \cdot A")
+    with st.expander("Variable Definitions"):
+        st.write("""
+        | Symbol | Definition |
+        | :--- | :--- |
+        | **Q** | Peak Rate of Runoff (m³/s). |
+        | **C** | **Runoff Coefficient.** Value between 0-1 based on site imperviousness. |
+        | **i** | Rainfall Intensity (mm/hr) based on Met Éireann data. |
+        | **A** | Area of the site in hectares. |
+        """)
 
-symbol_table = pd.DataFrame({
-    "Symbol": ["Q", "C", "i", "A"],
-    "Definition": [
-        "Peak Rate of Runoff (m³/s).",
-        "Runoff Coefficient. The fraction of rain that doesn't soak in.",
-        "Rainfall Intensity (mm/hr).",
-        "The Area of the site (hectares)."
-    ]
-})
-st.table(symbol_table)
-
-# 8. Summary & Draft Conditions (PRD 4.7)
-st.divider()
-st.header("Assessment Summary & Draft Conditions")
-
-overall_risk = "HIGH" # Derived from logic: Any HIGH = Overall HIGH
-st.error(f"OVERALL RISK CLASSIFICATION: {overall_risk}")
-
-st.subheader("Draft Planning Conditions")
-
-conditions = []
-if res["flood"]["level"] != "LOW":
-    conditions.append("Condition 1: Applicant must submit a Stage 3 Flood Risk Assessment including a Justification Test per OPW 2009 Guidelines.")
-if res["wfd"]["level"] == "HIGH":
-    conditions.append("Condition 2: A Water Framework Directive (WFD) Compliance Assessment is required to demonstrate no deterioration of the Liffey_180 water body.")
-if res["impervious"]["level"] == "HIGH":
-    conditions.append("Condition 3: SuDS design must limit discharge to 2 l/s/ha. Attenuation tanks must be sized for 1-in-100 year events.")
-
-for c in conditions:
-    st.text_area("Edit Condition", value=c, height=70)
-
-# 9. Data Attribution (PRD 9.4)
-st.caption("Data Sources: Copernicus CLMS (2018), EGMS (2025), OPW CFRAM, EPA WFD Status (Cycle 3).")
-
-if st.button("Export Full Assessment (PDF)"):
-    st.success("Report AQS-2026-0001-FINAL.pdf generated successfully.")
+    # Footer/Export
+    st.divider()
+    col_dl, col_attr = st.columns([1, 1])
+    col_dl.button("📥 Download PDF Assessment (AQS-2026-0001)")
+    col_attr.caption(f"Data attribution: Copernicus CLMS (2018), EGMS (20
