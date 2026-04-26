@@ -1,8 +1,8 @@
-streamlit>=1.56.0
-folium>=0.20.0
-streamlit-folium>=0.27.1
-openeo>=0.49.0
-xarray>=2026.4.0
-numpy>=2.4.4
-matplotlib>=3.10.9
-netCDF4>=1.7.0
+streamlit>=1.30.0
+folium
+streamlit-folium
+openeo
+xarray
+numpy
+matplotlib
+netCDF4
