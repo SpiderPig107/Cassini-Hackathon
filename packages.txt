@@ -1,4 +1,2 @@
-libgdal-dev
-libproj-dev
-binutils
-g++
+libnetcdf-dev
+libhdf5-dev
