@@ -1,8 +1,9 @@
-streamlit>=1.30.0
-folium
+streamlit
 streamlit-folium
-openeo
-xarray
+folium
+rasterio
+shapely
 numpy
 matplotlib
-netCDF4
+pyproj
+Pillow
